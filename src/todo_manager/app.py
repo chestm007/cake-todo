@@ -301,9 +301,10 @@ class TodoApp(App):
             f"Tags: {tags}\nDue: {due}    Assigned by: {assigned}\n"
             f"File: {task.path}"
         )
-        notes_view.update(
-            f"Notes:\n\n{notes}\n\nProgress:\n\n{progress or '(none)'}"
-        )
+        content = f"Notes:\n\n{notes}"
+        if progress:
+            content += f"\n\nProgress:\n\n{progress}"
+        notes_view.update(content)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self.update_details()
