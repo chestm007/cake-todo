@@ -11,6 +11,7 @@ from textual.screen import ModalScreen
 from textual.suggester import SuggestFromList
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, ListItem, ListView, Select, SelectionList, Static
 
+from .clickup import ClickUpCandidate, ClickUpClient, ClickUpError, ClickUpImportRegister
 from .config import Config
 from .github import GitHubCandidate, GitHubClient, GitHubError, GitHubImportRegister
 from .nvim_editor import NvimEditor
@@ -68,11 +69,13 @@ class TaskForm(ModalScreen[Task | None]):
         task: Task | None = None,
         tags: list[str] | None = None,
         assignees: list[str] | None = None,
+        level: int = 1,
     ):
         super().__init__(classes="task-form")
         self._todo = task
         self.tags = tags or []
         self.assignees = assignees or []
+        self.level = level
 
     def compose(self) -> ComposeResult:
         t = self._todo
@@ -124,7 +127,7 @@ class TaskForm(ModalScreen[Task | None]):
             return
         picked = list(self.query_one("#tag-picker", SelectionList).selected)
         tags = list(dict.fromkeys(picked))
-        task = self._todo or Task(Path(), 0, 0, 1, title)
+        task = self._todo or Task(Path(), 0, 0, self.level, title)
         task.title = title
         task.tags = tags
         task.due = due
@@ -258,6 +261,83 @@ class GitHubImportForm(ModalScreen[tuple[str, list[GitHubCandidate], list[str]] 
         self.dismiss(None)
 
 
+class ClickUpImportForm(ModalScreen[tuple[str, list[ClickUpCandidate], list[str]] | None]):
+    BINDINGS = [("ctrl+c", "cancel", "Cancel")]
+
+    def __init__(self, candidates: list[ClickUpCandidate], tags: list[str]):
+        super().__init__()
+        self.candidates = candidates
+        self.tags = tags
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("ClickUp candidates"),
+            SelectionList(
+                *[(candidate.label, candidate.key, False) for candidate in self.candidates],
+                id="clickup-candidates",
+            ),
+            Label("Local tags for imported tasks"),
+            SelectionList(*[(tag, tag, False) for tag in self.tags], id="clickup-tags"),
+            Horizontal(
+                Button("Import selected", variant="primary", id="import"),
+                Button("Ignore selected", id="ignore"),
+                Button("Cancel", id="cancel"),
+            ),
+            id="clickup-import-dialog",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        selected_keys = set(self.query_one("#clickup-candidates", SelectionList).selected)
+        selected = [candidate for candidate in self.candidates if candidate.key in selected_keys]
+        if not selected:
+            self.notify("Select at least one candidate", severity="warning")
+            return
+        selected_tags = list(self.query_one("#clickup-tags", SelectionList).selected)
+        self.dismiss((event.button.id, selected, selected_tags))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class MoveTaskForm(ModalScreen[Task | None]):
+    BINDINGS = [("ctrl+c", "cancel", "Cancel")]
+
+    def __init__(self, task: Task, targets: list[Task]):
+        super().__init__()
+        self.task_to_move = task
+        self.targets = targets
+
+    def compose(self) -> ComposeResult:
+        options: list[tuple[str, str | None]] = [("Top level", None)]
+        options.extend(
+            (
+                f"{'  ' * (target.level - 1)}{target.title}",
+                str(index),
+            )
+            for index, target in enumerate(self.targets)
+        )
+        yield Vertical(
+            Label(f"Move task: {self.task_to_move.title}"),
+            Select(options, prompt="Choose parent", id="parent"),
+            Horizontal(Button("Move", variant="primary", id="move"), Button("Cancel", id="cancel")),
+            id="dialog",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        value = self.query_one("#parent", Select).value
+        parent = self.targets[int(value)] if value is not None and value != Select.NULL else None
+        self.dismiss(parent)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class TodoApp(App):
     TITLE = "Org Todo"
     CSS = """
@@ -268,6 +348,9 @@ class TodoApp(App):
     #github-import-dialog { width: 80%; height: 80%; padding: 1 2; border: round $accent; background: $surface; }
     #github-candidates { height: 1fr; }
     #github-tags { height: auto; max-height: 8; }
+    #clickup-import-dialog { width: 80%; height: 80%; padding: 1 2; border: round $accent; background: $surface; }
+    #clickup-candidates { height: 1fr; }
+    #clickup-tags { height: auto; max-height: 8; }
     #dialog Input, #dialog Checkbox { margin: 1 0; }
     #dialog NvimEditor { height: 10; margin: 1 0; border: round $accent; }
     #dialog #body { height: 30; }
@@ -278,7 +361,7 @@ class TodoApp(App):
     #details { width: 1fr; height: 100%; padding: 1 2; border: round $accent; }
     #notes-scroll { height: 1fr; margin-top: 1; padding: 1 2; background: $surface-darken-1; }
     """
-    BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up"), ("a", "add", "Add"), ("e", "edit", "Edit"), ("p", "progress", "Progress"), ("g", "github_import", "GitHub import"), ("x", "toggle_done", "Complete"), ("n", "next_task", "Next task"), ("d", "delete", "Delete"), ("h", "hierarchy", "Hierarchy"), ("r", "reload", "Reload"), ("q", "quit", "Quit")]
+    BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up"), ("a", "add", "Add"), ("shift+a", "add_child", "Add child"), ("m", "move_task", "Move"), ("e", "edit", "Edit"), ("p", "progress", "Progress"), ("g", "github_import", "GitHub import"), ("c", "clickup_import", "ClickUp import"), ("x", "toggle_done", "Complete"), ("n", "next_task", "Next task"), ("d", "delete", "Delete"), ("h", "hierarchy", "Hierarchy"), ("r", "reload", "Reload"), ("q", "quit", "Quit")]
 
     def __init__(self, org_dir: Path):
         super().__init__()
@@ -286,6 +369,7 @@ class TodoApp(App):
         self.config = Config()
         self.tasks: list[Task] = []
         self.github_register = GitHubImportRegister()
+        self.clickup_register = ClickUpImportRegister()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -305,7 +389,18 @@ class TodoApp(App):
         self.reload()
 
     def reload(self) -> None:
-        self.tasks = sorted(self.store.load(), key=lambda t: t.sort_key(self.config.hierarchy))
+        loaded = self.store.load()
+        roots = [task for task in loaded if task.parent is None]
+        ordered: list[Task] = []
+
+        def append_tree(task: Task) -> None:
+            ordered.append(task)
+            for child in sorted(task.children, key=lambda item: item.sort_key(self.config.hierarchy)):
+                append_tree(child)
+
+        for root in sorted(roots, key=lambda item: item.sort_key(self.config.hierarchy)):
+            append_tree(root)
+        self.tasks = ordered
         view = self.query_one("#tasks", ListView)
         view.clear()
         if not self.tasks:
@@ -314,7 +409,7 @@ class TodoApp(App):
             due = task.due.isoformat() if task.due else "no due date"
             state = "✓" if task.done else "○"
             tag = task.most_important_tag(self.config.hierarchy)
-            line = Text(f"{state} [")
+            line = Text(f"{'  ' * (task.level - 1)}{state} [")
             line.append(tag, style="bold" if task.urgent else "")
             line.append(f"] {task.title}  {due}")
             view.append(ListItem(Label(line)))
@@ -341,8 +436,10 @@ class TodoApp(App):
         assigned = task.assigned_by or "(none)"
         notes = task.body_as_text() or "(none)"
         progress = task.progress_as_text()
+        parent = f"Parent: {task.parent.title}\n" if task.parent else ""
         metadata.update(
             f"[b]{task.title}[/b]\n"
+            f"{parent}"
             f"Status: {status}    Urgent: {'yes' if task.urgent else 'no'}\n"
             f"Tags: {tags}\nDue: {due}    Assigned by: {assigned}\n"
             f"File: {task.path}"
@@ -373,6 +470,48 @@ class TodoApp(App):
             task.path = self.store.default_file
             self.store.add(task)
             self.reload()
+
+    def action_add_child(self) -> None:
+        parent = self.selected()
+        if parent:
+            self.push_screen(
+                TaskForm(
+                    tags=self.config.hierarchy,
+                    assignees=self.all_assignees(),
+                    level=parent.level + 1,
+                ),
+                lambda task: self.created_child(parent, task),
+            )
+
+    def created_child(self, parent: Task, task: Task | None) -> None:
+        if task:
+            task.path = parent.path
+            self.store.add_child(parent, task)
+            self.reload()
+
+    def action_move_task(self) -> None:
+        task = self.selected()
+        if task is None:
+            return
+        targets = [
+            candidate
+            for candidate in self.tasks
+            if candidate.path == task.path and candidate is not task and not self.is_descendant(candidate, task)
+        ]
+        self.push_screen(MoveTaskForm(task, targets), lambda parent: self.moved(task, parent))
+
+    @staticmethod
+    def is_descendant(candidate: Task, ancestor: Task) -> bool:
+        parent = candidate.parent
+        while parent is not None:
+            if parent is ancestor:
+                return True
+            parent = parent.parent
+        return False
+
+    def moved(self, task: Task, parent: Task | None) -> None:
+        self.store.move(task, parent)
+        self.reload()
 
     def action_edit(self) -> None:
         task = self.selected()
@@ -429,6 +568,49 @@ class TodoApp(App):
         if action == "import":
             self.reload()
 
+    def action_clickup_import(self) -> None:
+        try:
+            candidates = ClickUpClient().candidates(self.clickup_register)
+        except ClickUpError as error:
+            self.notify(str(error), severity="error", timeout=8)
+            return
+        if not candidates:
+            self.notify("No new open ClickUp tasks")
+            return
+        self.push_screen(
+            ClickUpImportForm(candidates, self.config.hierarchy),
+            self.clickup_import_result,
+        )
+
+    def clickup_import_result(
+        self,
+        result: tuple[str, list[ClickUpCandidate], list[str]] | None,
+    ) -> None:
+        if result is None:
+            return
+        action, candidates, selected_tags = result
+        for candidate in candidates:
+            if action == "ignore":
+                self.clickup_register.mark(candidate, "ignored")
+                continue
+            task = Task(
+                self.store.default_file,
+                0,
+                0,
+                1,
+                candidate.title,
+                tags=list(dict.fromkeys(selected_tags)),
+                due=parse_due_date(candidate.due) if candidate.due else None,
+                urgent=candidate.urgent,
+                body=candidate.body.splitlines(),
+                clickup_url=candidate.url,
+            )
+            self.store.add(task)
+            self.clickup_register.mark(candidate, "imported")
+        self.clickup_register.save()
+        if action == "import":
+            self.reload()
+
     def add_progress(self, task: Task, note: str | None) -> None:
         if note:
             task.progress.append((date.today().isoformat(), note))
@@ -443,7 +625,16 @@ class TodoApp(App):
     def action_toggle_done(self) -> None:
         task = self.selected()
         if task:
-            task.done = not task.done
+            new_done = not task.done
+            if new_done and task.clickup_url:
+                task_id = self.clickup_register.task_id_for_url(task.clickup_url)
+                if task_id:
+                    try:
+                        ClickUpClient().complete_task(task_id)
+                    except ClickUpError as error:
+                        self.notify(str(error), severity="error", timeout=8)
+                        return
+            task.done = new_done
             self.store.save(task)
             self.reload()
 

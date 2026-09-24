@@ -25,6 +25,9 @@ class Task:
     body: list[str] = field(default_factory=list)
     progress: list[tuple[str, str]] = field(default_factory=list)
     github_url: str = ""
+    clickup_url: str = ""
+    parent: Task | None = field(default=None, repr=False, compare=False)
+    children: list[Task] = field(default_factory=list, repr=False, compare=False)
 
     @property
     def classification(self) -> str:
@@ -62,7 +65,7 @@ class Task:
         lines = [f"{'*' * self.level} {state} {self.title}{tags}"]
         if self.due:
             lines.append(f"  SCHEDULED: <{self.due.isoformat()}>")
-        if self.assigned_by or self.urgent or self.github_url:
+        if self.assigned_by or self.urgent or self.github_url or self.clickup_url:
             lines += ["  :PROPERTIES:"]
             if self.assigned_by:
                 lines.append(f"  :ASSIGNED-BY: {self.assigned_by}")
@@ -70,6 +73,8 @@ class Task:
                 lines.append("  :URGENT: t")
             if self.github_url:
                 lines.append(f"  :GITHUB-URL: {self.github_url}")
+            if self.clickup_url:
+                lines.append(f"  :CLICKUP-URL: {self.clickup_url}")
             lines.append("  :END:")
         if self.progress:
             lines.append("  :LOGBOOK:")
@@ -94,19 +99,40 @@ class OrgStore:
             lines = path.read_text(encoding="utf-8").splitlines()
             matches = [(i, m) for i, line in enumerate(lines) if (m := HEADING.match(line))]
             for index, (start, match) in enumerate(matches):
-                end = matches[index + 1][0] if index + 1 < len(matches) else len(lines)
-                if len(match.group("stars")) > 1:
-                    continue
-                task = self._parse_task(path, lines, start, end, match)
+                level = len(match.group("stars"))
+                body_end = matches[index + 1][0] if index + 1 < len(matches) else len(lines)
+                subtree_end = len(lines)
+                for child_start, child_match in matches[index + 1:]:
+                    if len(child_match.group("stars")) <= level:
+                        subtree_end = child_start
+                        break
+                task = self._parse_task(path, lines, start, body_end, subtree_end, match)
                 tasks.append(task)
+        stack: list[Task] = []
+        for task in tasks:
+            while stack and (stack[-1].path != task.path or stack[-1].level >= task.level):
+                stack.pop()
+            if stack:
+                task.parent = stack[-1]
+                stack[-1].children.append(task)
+            stack.append(task)
         return tasks
 
-    def _parse_task(self, path: Path, lines: list[str], start: int, end: int, match: re.Match) -> Task:
+    def _parse_task(
+        self,
+        path: Path,
+        lines: list[str],
+        start: int,
+        body_end: int,
+        subtree_end: int,
+        match: re.Match,
+    ) -> Task:
         tags = [x for x in (match.group("tags") or "").strip(":").split(":") if x]
         due = None
         assigned = ""
         urgent = False
         github_url = ""
+        clickup_url = ""
         body: list[str] = []
         progress: list[tuple[str, str]] = []
         progress_note: tuple[str, list[str]] | None = None
@@ -120,7 +146,7 @@ class OrgStore:
                 progress.append((when, "\n".join(note_lines)))
                 progress_note = None
 
-        for line in lines[start + 1:end]:
+        for line in lines[start + 1:body_end]:
             if line.strip() == ":LOGBOOK:":
                 in_logbook = True
                 continue
@@ -151,15 +177,23 @@ class OrgStore:
                     urgent = prop.group("value").strip().lower() in {"t", "true", "yes", "1"}
                 elif prop.group("key") == "GITHUB-URL":
                     github_url = prop.group("value").strip()
+                elif prop.group("key") == "CLICKUP-URL":
+                    clickup_url = prop.group("value").strip()
             else:
                 body.append(line)
-        return Task(path, start, end, len(match.group("stars")), match.group("title").strip(), tags, due, assigned, urgent, match.group("state") == "DONE", body, progress, github_url)
+        return Task(path, start, subtree_end, len(match.group("stars")), match.group("title").strip(), tags, due, assigned, urgent, match.group("state") == "DONE", body, progress, github_url, clickup_url)
 
     def save(self, task: Task) -> None:
         lines = task.path.read_text(encoding="utf-8").splitlines(keepends=True) if task.path.exists() else []
         replacement = task.to_org()
         # line/end_line are from the last load; save immediately after each edit.
-        lines[task.line:task.end_line] = [replacement]
+        body_end = task.end_line
+        for index in range(task.line + 1, task.end_line):
+            match = HEADING.match(lines[index])
+            if match and len(match.group("stars")) > task.level:
+                body_end = index
+                break
+        lines[task.line:body_end] = [replacement]
         task.path.write_text("".join(lines), encoding="utf-8")
 
     def add(self, task: Task) -> None:
@@ -168,6 +202,34 @@ class OrgStore:
             if self.default_file.stat().st_size:
                 handle.write("\n")
             handle.write(task.to_org())
+
+    def add_child(self, parent: Task, task: Task) -> None:
+        lines = parent.path.read_text(encoding="utf-8").splitlines(keepends=True) if parent.path.exists() else []
+        lines[parent.end_line:parent.end_line] = [task.to_org()]
+        parent.path.write_text("".join(lines), encoding="utf-8")
+
+    def move(self, task: Task, parent: Task | None) -> None:
+        lines = task.path.read_text(encoding="utf-8").splitlines(keepends=True)
+        start, end = task.line, task.end_line
+        block = lines[start:end]
+        delta = (parent.level + 1 if parent else 1) - task.level
+        if delta:
+            adjusted: list[str] = []
+            for line in block:
+                match = HEADING.match(line)
+                if match:
+                    stars = len(match.group("stars")) + delta
+                    line = "*" * stars + line[len(match.group("stars")):]
+                adjusted.append(line)
+            block = adjusted
+        del lines[start:end]
+        if parent is None:
+            insertion = len(lines)
+        else:
+            removed = end - start if parent.line > start else 0
+            insertion = parent.end_line - removed
+        lines[insertion:insertion] = block
+        task.path.write_text("".join(lines), encoding="utf-8")
 
     def delete(self, task: Task) -> None:
         lines = task.path.read_text(encoding="utf-8").splitlines(keepends=True)
