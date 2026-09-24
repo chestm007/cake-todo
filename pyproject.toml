@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "todo-manager"
+version = "0.1.0"
+description = "A small Textual todo manager backed by Org files"
+requires-python = ">=3.10"
+dependencies = ["textual>=0.47"]
+
+[project.scripts]
+todo = "todo_manager.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
