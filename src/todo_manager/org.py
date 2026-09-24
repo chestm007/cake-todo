@@ -24,6 +24,7 @@ class Task:
     done: bool = False
     body: list[str] = field(default_factory=list)
     progress: list[tuple[str, str]] = field(default_factory=list)
+    github_url: str = ""
 
     @property
     def classification(self) -> str:
@@ -61,12 +62,14 @@ class Task:
         lines = [f"{'*' * self.level} {state} {self.title}{tags}"]
         if self.due:
             lines.append(f"  SCHEDULED: <{self.due.isoformat()}>")
-        if self.assigned_by or self.urgent:
+        if self.assigned_by or self.urgent or self.github_url:
             lines += ["  :PROPERTIES:"]
             if self.assigned_by:
                 lines.append(f"  :ASSIGNED-BY: {self.assigned_by}")
             if self.urgent:
                 lines.append("  :URGENT: t")
+            if self.github_url:
+                lines.append(f"  :GITHUB-URL: {self.github_url}")
             lines.append("  :END:")
         if self.progress:
             lines.append("  :LOGBOOK:")
@@ -103,6 +106,7 @@ class OrgStore:
         due = None
         assigned = ""
         urgent = False
+        github_url = ""
         body: list[str] = []
         progress: list[tuple[str, str]] = []
         progress_note: tuple[str, list[str]] | None = None
@@ -145,9 +149,11 @@ class OrgStore:
                     assigned = prop.group("value").strip()
                 elif prop.group("key") == "URGENT":
                     urgent = prop.group("value").strip().lower() in {"t", "true", "yes", "1"}
+                elif prop.group("key") == "GITHUB-URL":
+                    github_url = prop.group("value").strip()
             else:
                 body.append(line)
-        return Task(path, start, end, len(match.group("stars")), match.group("title").strip(), tags, due, assigned, urgent, match.group("state") == "DONE", body, progress)
+        return Task(path, start, end, len(match.group("stars")), match.group("title").strip(), tags, due, assigned, urgent, match.group("state") == "DONE", body, progress, github_url)
 
     def save(self, task: Task) -> None:
         lines = task.path.read_text(encoding="utf-8").splitlines(keepends=True) if task.path.exists() else []

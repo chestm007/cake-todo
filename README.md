@@ -21,5 +21,10 @@ The classification hierarchy is managed with `h` and stored in
 first. `n` selects the next open task according to the urgent/due-date and
 classification ordering rules.
 
+Press `g` to manually import open GitHub issues assigned to you and pull
+requests authored by you, assigned to you, or requesting your review. GitHub
+access uses the token stored in `~/.github_token`; imported and ignored
+candidates are recorded in `~/.config/todo-manager/github-imports.json`.
+
 Tasks are written as ordinary Org headings with `TODO`/`DONE`, heading tags,
 `SCHEDULED`, `ASSIGNED-BY`, and `URGENT` properties.

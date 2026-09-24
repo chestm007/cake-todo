@@ -12,6 +12,7 @@ from textual.suggester import SuggestFromList
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, ListItem, ListView, Select, SelectionList, Static
 
 from .config import Config
+from .github import GitHubCandidate, GitHubClient, GitHubError, GitHubImportRegister
 from .nvim_editor import NvimEditor
 from .org import OrgStore, Task
 
@@ -216,6 +217,47 @@ class DeleteConfirmation(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class GitHubImportForm(ModalScreen[tuple[str, list[GitHubCandidate], list[str]] | None]):
+    BINDINGS = [("ctrl+c", "cancel", "Cancel")]
+
+    def __init__(self, candidates: list[GitHubCandidate], tags: list[str]):
+        super().__init__()
+        self.candidates = candidates
+        self.tags = tags
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label("GitHub candidates"),
+            SelectionList(
+                *[(candidate.label, candidate.key, False) for candidate in self.candidates],
+                id="github-candidates",
+            ),
+            Label("Local tags for imported tasks"),
+            SelectionList(*[(tag, tag, False) for tag in self.tags], id="github-tags"),
+            Horizontal(
+                Button("Import selected", variant="primary", id="import"),
+                Button("Ignore selected", id="ignore"),
+                Button("Cancel", id="cancel"),
+            ),
+            id="github-import-dialog",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+            return
+        selected_keys = set(self.query_one("#github-candidates", SelectionList).selected)
+        selected = [candidate for candidate in self.candidates if candidate.key in selected_keys]
+        if not selected:
+            self.notify("Select at least one candidate", severity="warning")
+            return
+        selected_tags = list(self.query_one("#github-tags", SelectionList).selected)
+        self.dismiss((event.button.id, selected, selected_tags))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class TodoApp(App):
     TITLE = "Org Todo"
     CSS = """
@@ -223,6 +265,9 @@ class TodoApp(App):
     #dialog { width: 70; height: auto; padding: 1 2; border: round $accent; background: $surface; }
     .task-form { align: center middle; }
     .task-form #dialog { width: 50%; }
+    #github-import-dialog { width: 80%; height: 80%; padding: 1 2; border: round $accent; background: $surface; }
+    #github-candidates { height: 1fr; }
+    #github-tags { height: auto; max-height: 8; }
     #dialog Input, #dialog Checkbox { margin: 1 0; }
     #dialog NvimEditor { height: 10; margin: 1 0; border: round $accent; }
     #dialog #body { height: 30; }
@@ -233,13 +278,14 @@ class TodoApp(App):
     #details { width: 1fr; height: 100%; padding: 1 2; border: round $accent; }
     #notes-scroll { height: 1fr; margin-top: 1; padding: 1 2; background: $surface-darken-1; }
     """
-    BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up"), ("a", "add", "Add"), ("e", "edit", "Edit"), ("p", "progress", "Progress"), ("x", "toggle_done", "Complete"), ("n", "next_task", "Next task"), ("d", "delete", "Delete"), ("h", "hierarchy", "Hierarchy"), ("r", "reload", "Reload"), ("q", "quit", "Quit")]
+    BINDINGS = [("j", "move_down", "Down"), ("k", "move_up", "Up"), ("a", "add", "Add"), ("e", "edit", "Edit"), ("p", "progress", "Progress"), ("g", "github_import", "GitHub import"), ("x", "toggle_done", "Complete"), ("n", "next_task", "Next task"), ("d", "delete", "Delete"), ("h", "hierarchy", "Hierarchy"), ("r", "reload", "Reload"), ("q", "quit", "Quit")]
 
     def __init__(self, org_dir: Path):
         super().__init__()
         self.store = OrgStore(org_dir)
         self.config = Config()
         self.tasks: list[Task] = []
+        self.github_register = GitHubImportRegister()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -331,12 +377,57 @@ class TodoApp(App):
     def action_edit(self) -> None:
         task = self.selected()
         if task:
-            self.push_screen(TaskForm(task, self.all_tags(), self.all_assignees()), self.edited)
+            tags = list(dict.fromkeys(self.config.hierarchy + self.all_tags()))
+            self.push_screen(TaskForm(task, tags, self.all_assignees()), self.edited)
 
     def action_progress(self) -> None:
         task = self.selected()
         if task:
             self.push_screen(ProgressForm(), lambda note: self.add_progress(task, note))
+
+    def action_github_import(self) -> None:
+        try:
+            candidates = GitHubClient().candidates(self.github_register)
+        except GitHubError as error:
+            self.notify(str(error), severity="error", timeout=8)
+            return
+        if not candidates:
+            self.notify("No new open GitHub issues or pull requests")
+            return
+        self.push_screen(
+            GitHubImportForm(candidates, self.config.hierarchy),
+            self.github_import_result,
+        )
+
+    def github_import_result(
+        self,
+        result: tuple[str, list[GitHubCandidate], list[str]] | None,
+    ) -> None:
+        if result is None:
+            return
+        action, candidates, selected_tags = result
+        for candidate in candidates:
+            if action == "ignore":
+                self.github_register.mark(candidate, "ignored")
+                continue
+            tags = list(selected_tags)
+            if candidate.kind == "pr":
+                tags.append("github-pr")
+            task = Task(
+                self.store.default_file,
+                0,
+                0,
+                1,
+                candidate.title,
+                tags=list(dict.fromkeys(tags)),
+                body=candidate.body.splitlines(),
+                github_url=candidate.url,
+            )
+            self.store.add(task)
+            self.github_register.mark(candidate, "imported")
+        self.github_register.save()
+        if action == "import":
+            self.reload()
 
     def add_progress(self, task: Task, note: str | None) -> None:
         if note:
