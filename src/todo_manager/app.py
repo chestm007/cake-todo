@@ -299,9 +299,11 @@ class TodoApp(App):
             f"[b]{task.title}[/b]\n"
             f"Status: {status}    Urgent: {'yes' if task.urgent else 'no'}\n"
             f"Tags: {tags}\nDue: {due}    Assigned by: {assigned}\n"
-            f"File: {task.path}\nNotes:"
+            f"File: {task.path}"
         )
-        notes_view.update(f"{notes}\n\nProgress:\n\n{progress}" if progress else notes)
+        notes_view.update(
+            f"Notes:\n\n{notes}\n\nProgress:\n\n{progress or '(none)'}"
+        )
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         self.update_details()
