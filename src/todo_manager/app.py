@@ -8,6 +8,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
+from textual.suggester import SuggestFromList
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, ListItem, ListView, Select, SelectionList, Static
 
 from .config import Config
@@ -15,13 +16,62 @@ from .nvim_editor import NvimEditor
 from .org import OrgStore, Task
 
 
-class TaskForm(ModalScreen[Task | None]):
-    BINDINGS = [("ctrl+enter", "submit", "Submit")]
+def parse_due_date(value: str) -> date | None:
+    """Parse the user-facing DD-MM due date format.
 
-    def __init__(self, task: Task | None = None, tags: list[str] | None = None):
-        super().__init__()
+    A date without a year is assigned to the next occurrence on or after
+    today. ISO dates are also accepted for values coming from the picker.
+    """
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        pass
+    parts = value.split("-")
+    if len(parts) not in (2, 3):
+        raise ValueError from None
+    try:
+        day, month = (int(part) for part in parts[:2])
+    except ValueError:
+        raise ValueError from None
+    if len(parts) == 2:
+        year = date.today().year
+        while True:
+            try:
+                candidate = date(year, month, day)
+            except ValueError:
+                year += 1
+                continue
+            if candidate >= date.today():
+                return candidate
+            year += 1
+    try:
+        year = int(parts[2])
+    except ValueError:
+        raise ValueError from None
+    if year < 1000:
+        raise ValueError
+    try:
+        return date(year, month, day)
+    except ValueError:
+        raise ValueError from None
+
+
+class TaskForm(ModalScreen[Task | None]):
+    BINDINGS = [("ctrl+enter", "submit", "Submit"), ("ctrl+c", "cancel", "Cancel")]
+
+    def __init__(
+        self,
+        task: Task | None = None,
+        tags: list[str] | None = None,
+        assignees: list[str] | None = None,
+    ):
+        super().__init__(classes="task-form")
         self._todo = task
         self.tags = tags or []
+        self.assignees = assignees or []
 
     def compose(self) -> ComposeResult:
         t = self._todo
@@ -29,15 +79,19 @@ class TaskForm(ModalScreen[Task | None]):
             Label("Edit task" if t else "New task"),
             Input(t.title if t else "", placeholder="Title", id="title"),
             SelectionList(*[(tag, tag, bool(t and tag in t.tags)) for tag in self.tags], id="tag-picker"),
-            Input("", placeholder="New tags (comma separated)", id="tags"),
-            Input(t.due.isoformat() if t and t.due else "", placeholder="Due date (YYYY-MM-DD)", id="due"),
+            Input(t.due.strftime("%d-%m") if t and t.due else "", placeholder="Due date (DD-MM)", id="due"),
             Select(
                 [("No due date", ""), ("Today", date.today().isoformat()),
                  ("Tomorrow", (date.today() + timedelta(days=1)).isoformat()),
                  ("Next week", (date.today() + timedelta(days=7)).isoformat())],
                 value=t.due.isoformat() if t and t.due else "", id="due-picker",
             ),
-            Input(t.assigned_by if t else "", placeholder="Assigned by (for example @krut)", id="assigned"),
+            Input(
+                t.assigned_by if t else "",
+                placeholder="Assigned by (for example @krut)",
+                suggester=SuggestFromList(self.assignees, case_sensitive=False),
+                id="assigned",
+            ),
             Checkbox("Urgent", value=t.urgent if t else False, id="urgent"),
             NvimEditor(t.body_as_text() if t else "", id="body"),
             Horizontal(Button("Save", variant="primary", id="save"), Button("Cancel", id="cancel")),
@@ -53,6 +107,9 @@ class TaskForm(ModalScreen[Task | None]):
     def action_submit(self) -> None:
         self.submit()
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
     def submit(self) -> None:
         title = self.query_one("#title", Input).value.strip()
         if not title:
@@ -60,13 +117,12 @@ class TaskForm(ModalScreen[Task | None]):
             return
         due_text = self.query_one("#due", Input).value.strip() or str(self.query_one("#due-picker", Select).value or "")
         try:
-            due = date.fromisoformat(due_text) if due_text else None
+            due = parse_due_date(due_text)
         except ValueError:
-            self.notify("Due date must be YYYY-MM-DD", severity="error")
+            self.notify("Due date must be DD-MM", severity="error")
             return
         picked = list(self.query_one("#tag-picker", SelectionList).selected)
-        new_tags = [x.strip() for x in self.query_one("#tags", Input).value.split(",") if x.strip()]
-        tags = list(dict.fromkeys(picked + new_tags))
+        tags = list(dict.fromkeys(picked))
         task = self._todo or Task(Path(), 0, 0, 1, title)
         task.title = title
         task.tags = tags
@@ -78,7 +134,7 @@ class TaskForm(ModalScreen[Task | None]):
 
 
 class HierarchyForm(ModalScreen[list[str] | None]):
-    BINDINGS = [("ctrl+enter", "submit", "Submit")]
+    BINDINGS = [("ctrl+enter", "submit", "Submit"), ("ctrl+c", "cancel", "Cancel")]
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -100,13 +156,16 @@ class HierarchyForm(ModalScreen[list[str] | None]):
     def action_submit(self) -> None:
         self.submit()
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
     def submit(self) -> None:
         values = [x.strip() for x in self.query_one("#hierarchy", Input).value.split(",") if x.strip()]
         self.dismiss(values)
 
 
 class ProgressForm(ModalScreen[str | None]):
-    BINDINGS = [("ctrl+enter", "submit", "Submit")]
+    BINDINGS = [("ctrl+enter", "submit", "Submit"), ("ctrl+c", "cancel", "Cancel")]
 
     def compose(self) -> ComposeResult:
         yield Vertical(
@@ -125,6 +184,9 @@ class ProgressForm(ModalScreen[str | None]):
     def action_submit(self) -> None:
         self.submit()
 
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
     def submit(self) -> None:
         note = self.query_one("#progress-note", NvimEditor).text.strip()
         if not note:
@@ -134,6 +196,8 @@ class ProgressForm(ModalScreen[str | None]):
 
 
 class DeleteConfirmation(ModalScreen[bool]):
+    BINDINGS = [("ctrl+c", "cancel", "Cancel")]
+
     def __init__(self, title: str):
         super().__init__()
         self.title_text = title
@@ -148,12 +212,17 @@ class DeleteConfirmation(ModalScreen[bool]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "delete")
 
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
 
 class TodoApp(App):
     TITLE = "Org Todo"
     CSS = """
     Screen { background: $surface; }
     #dialog { width: 70; height: auto; padding: 1 2; border: round $accent; background: $surface; }
+    .task-form { align: center middle; }
+    .task-form #dialog { width: 50%; }
     #dialog Input, #dialog Checkbox { margin: 1 0; }
     #dialog NvimEditor { height: 10; margin: 1 0; border: round $accent; }
     #dialog #body { height: 30; }
@@ -248,7 +317,7 @@ class TodoApp(App):
             view.index = max(0, view.index - 1)
 
     def action_add(self) -> None:
-        self.push_screen(TaskForm(tags=self.all_tags()), self.created)
+        self.push_screen(TaskForm(tags=self.config.hierarchy, assignees=self.all_assignees()), self.created)
 
     def created(self, task: Task | None) -> None:
         if task:
@@ -259,7 +328,7 @@ class TodoApp(App):
     def action_edit(self) -> None:
         task = self.selected()
         if task:
-            self.push_screen(TaskForm(task, self.all_tags()), self.edited)
+            self.push_screen(TaskForm(task, self.all_tags(), self.all_assignees()), self.edited)
 
     def action_progress(self) -> None:
         task = self.selected()
@@ -316,6 +385,9 @@ class TodoApp(App):
 
     def all_tags(self) -> list[str]:
         return sorted({tag for task in self.tasks for tag in task.tags})
+
+    def all_assignees(self) -> list[str]:
+        return sorted({task.assigned_by for task in self.tasks if task.assigned_by})
 
 
 def main() -> None:

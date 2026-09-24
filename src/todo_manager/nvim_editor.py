@@ -219,7 +219,7 @@ class NvimEditor(Widget):
 
     async def on_key(self, event: events.Key) -> None:
         # Let the modal form's Ctrl+Enter binding submit the form.
-        if event.key == "ctrl+enter":
+        if event.key in {"ctrl+enter", "ctrl+c"}:
             return
         nvim = self._nvim
         if nvim is None or not self._ready.wait(timeout=0.1):
