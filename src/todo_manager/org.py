@@ -67,7 +67,9 @@ class Task:
         if self.progress:
             lines.append("  :LOGBOOK:")
             for when, note in self.progress:
-                lines.append(f"  - [{when}] {note}")
+                note_lines = note.splitlines() or [""]
+                lines.append(f"  - [{when}] {note_lines[0]}")
+                lines.extend(f"    {line}" for line in note_lines[1:])
             lines.append("  :END:")
         lines.extend(self.body)
         return "\n".join(lines) + "\n"
@@ -99,19 +101,32 @@ class OrgStore:
         urgent = False
         body: list[str] = []
         progress: list[tuple[str, str]] = []
+        progress_note: tuple[str, list[str]] | None = None
         in_props = False
         in_logbook = False
+
+        def flush_progress_note() -> None:
+            nonlocal progress_note
+            if progress_note is not None:
+                when, note_lines = progress_note
+                progress.append((when, "\n".join(note_lines)))
+                progress_note = None
+
         for line in lines[start + 1:end]:
             if line.strip() == ":LOGBOOK:":
                 in_logbook = True
                 continue
             if in_logbook:
                 if line.strip() == ":END:":
+                    flush_progress_note()
                     in_logbook = False
                 else:
                     entry = re.match(r"^\s*-\s*\[(?P<date>\d{4}-\d{2}-\d{2})\]\s+(?P<note>.+)$", line)
                     if entry:
-                        progress.append((entry.group("date"), entry.group("note").strip()))
+                        flush_progress_note()
+                        progress_note = (entry.group("date"), [entry.group("note").strip()])
+                    elif progress_note is not None:
+                        progress_note[1].append(line.strip())
                 continue
             scheduled = SCHEDULED.match(line)
             prop = PROPERTY.match(line)
