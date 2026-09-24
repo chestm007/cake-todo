@@ -13,7 +13,7 @@ class Config:
     def load(self) -> None:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            self.hierarchy = list(data.get("hierarchy", []))
+            self.hierarchy = [value.strip() for value in data.get("hierarchy", []) if value.strip()]
         except (FileNotFoundError, json.JSONDecodeError):
             self.hierarchy = []
 

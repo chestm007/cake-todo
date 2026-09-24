@@ -29,6 +29,9 @@ class Task:
     parent: Task | None = field(default=None, repr=False, compare=False)
     children: list[Task] = field(default_factory=list, repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        self.tags = list(dict.fromkeys(tag.strip() for tag in self.tags if tag.strip()))
+
     @property
     def classification(self) -> str:
         return self.tags[0] if self.tags else "Unclassified"
