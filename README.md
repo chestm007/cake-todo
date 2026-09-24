@@ -2,6 +2,10 @@
 
 Small Textual todo manager backed by `~/orgfiles/*.org`.
 
+Multiline fields use a headless Neovim instance, so Neovim must be installed
+and available as `nvim` on `PATH`. This provides normal, insert, and visual
+editing modes while preserving Org body text.
+
 ## Run
 
 ```sh

@@ -8,9 +8,10 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, ListItem, ListView, Select, SelectionList, Static, TextArea
+from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, ListItem, ListView, Select, SelectionList, Static
 
 from .config import Config
+from .nvim_editor import NvimEditor
 from .org import OrgStore, Task
 
 
@@ -38,7 +39,7 @@ class TaskForm(ModalScreen[Task | None]):
             ),
             Input(t.assigned_by if t else "", placeholder="Assigned by (for example @krut)", id="assigned"),
             Checkbox("Urgent", value=t.urgent if t else False, id="urgent"),
-            TextArea(t.body_as_text() if t else "", id="body"),
+            NvimEditor(t.body_as_text() if t else "", id="body"),
             Horizontal(Button("Save", variant="primary", id="save"), Button("Cancel", id="cancel")),
             id="dialog",
         )
@@ -72,7 +73,7 @@ class TaskForm(ModalScreen[Task | None]):
         task.due = due
         task.assigned_by = self.query_one("#assigned", Input).value.strip()
         task.urgent = self.query_one("#urgent", Checkbox).value
-        task.body = self.query_one("#body", TextArea).text.splitlines()
+        task.body = self.query_one("#body", NvimEditor).text.splitlines()
         self.dismiss(task)
 
 
@@ -110,7 +111,7 @@ class ProgressForm(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         yield Vertical(
             Label("Add progress note"),
-            TextArea(id="progress-note"),
+            NvimEditor(id="progress-note"),
             Horizontal(Button("Add", variant="primary", id="add"), Button("Cancel", id="cancel")),
             id="dialog",
         )
@@ -125,7 +126,7 @@ class ProgressForm(ModalScreen[str | None]):
         self.submit()
 
     def submit(self) -> None:
-        note = self.query_one("#progress-note", TextArea).text.strip()
+        note = self.query_one("#progress-note", NvimEditor).text.strip()
         if not note:
             self.notify("A progress note is required", severity="error")
             return
@@ -154,6 +155,8 @@ class TodoApp(App):
     Screen { background: $surface; }
     #dialog { width: 70; height: auto; padding: 1 2; border: round $accent; background: $surface; }
     #dialog Input, #dialog Checkbox { margin: 1 0; }
+    #dialog NvimEditor { height: 10; margin: 1 0; border: round $accent; }
+    #dialog #body { height: 30; }
     #dialog Button { margin: 1 1; }
     #empty { padding: 2; color: $text-muted; }
     #content { height: 1fr; }
