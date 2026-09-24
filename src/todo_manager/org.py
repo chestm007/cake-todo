@@ -49,7 +49,11 @@ class Task:
         return "\n".join(self.body)
 
     def progress_as_text(self) -> str:
-        return "\n\n".join(f"{when}  {note}" for when, note in self.progress)
+        entries = []
+        for when, note in self.progress:
+            continuation_indent = " " * (len(when) + 2)
+            entries.append(f"{when}  {note.replace(chr(10), chr(10) + continuation_indent)}")
+        return "\n\n".join(entries)
 
     def to_org(self) -> str:
         tags = f" {' '.join(':' + t + ':' for t in self.tags)}" if self.tags else ""
